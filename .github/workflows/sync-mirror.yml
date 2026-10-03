@@ -1,0 +1,54 @@
+name: sync-webrtc-mirror
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+    group: sync-webrtc-mirror
+    cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream main (shallow since 30 days ago)
+        run: |
+          set -euxo pipefail
+          git remote add upstream https://webrtc.googlesource.com/src.git
+          SINCE="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%S)"
+          git fetch --shallow-since="$SINCE" upstream main
+          echo "upstream tip: $(git rev-parse FETCH_HEAD) (window since $SINCE)"
+
+      - name: Rebuild main = upstream tip + workflow file
+        run: |
+          set -euxo pipefail
+          WF="$RUNNER_TEMP/sync-mirror.yml"
+          git cat-file blob "$(git rev-parse HEAD:.github/workflows/sync-mirror.yml)" > "$WF"
+          UP="$(git rev-parse FETCH_HEAD)"
+          git checkout --quiet --detach "$UP"
+          mkdir -p .github/workflows
+          cp "$WF" .github/workflows/sync-mirror.yml
+          git add .github/workflows/sync-mirror.yml
+          git commit --quiet -m "ci: sync upstream $UP"
+          echo "main = upstream $UP + workflow commit $(git rev-parse HEAD)"
+
+      - name: Push ONLY refs/heads/main
+        run: |
+          set -euxo pipefail
+          git push --force origin HEAD:refs/heads/main
+          echo "pushed $(git rev-parse HEAD)"
